@@ -689,10 +689,10 @@ retry:
 }
 ```
 
-> 1. 当 `next` 为 `true` 时，将 Goroutine 设置到处理器的 `runnext` 作为下一个处理器执行的任务；
+> 1. 当 `next` 为 `true` 时，将 Goroutine 设置到 P 的 `runnext` ，作为 P下一个执行的任务；
 > 2. 当 `next` 为 `false` 并且本地运行队列还有剩余空间时，将 Goroutine 加入处理器持有的本地运行队列；
-> 3. 当处理器的本地运行队列已经没有剩余空间时就会把本地队列中的一部分 Goroutine 和待加入的 Goroutine 通过 runtime.runqputslow 添加到调度器持有的全局运行队列上，再次尝试加入本地队列（goto retry）；
-> 4. 处理器本地的运行队列是一个使用数组构成的环形链表，它最多可以存储 256 个待执行任务
+> 3. 当P的本地运行队列已经没有剩余空间时就会把本地队列中的一部分 Goroutine 和待加入的 Goroutine 通过 runtime.runqputslow 添加到调度器持有的全局运行队列上，再次尝试加入本地队列（goto retry）；
+> 4. P本地的运行队列是一个使用数组构成的环形链表，它最多可以存储 256 个待执行任务
 
 ### P 获取
 
@@ -869,7 +869,7 @@ top:
 >
 > 1. 从本地运行队列、全局运行队列中查找；
 > 2. 从网络轮询器中查找是否有 Goroutine 等待运行；
-> 3. 通过 runtime.runqsteal 尝试从其他随机的处理器中窃取待运行的 Goroutine，该函数还可能窃取处理器的计时器；
+> 3. 通过 runtime.runqsteal 尝试从其他随机的 P 中窃取待运行的 Goroutine，该函数还可能窃取 P 的计时器；
 >
 > 因为函数的实现过于复杂，上述的执行过程是经过简化的，总而言之，当前函数一定会返回一个可执行的 Goroutine，如果当前不存在就会阻塞等待。
 >
@@ -914,7 +914,7 @@ func goexit1() {
 }
 ```
 
-> 经过一系列复杂的函数调用，我们最终在当前线程的 g0 的栈上调用 runtime.goexit0 函数，该函数会将 Goroutine 转换会 _Gdead 状态、清理其中的字段、移除 Goroutine 和线程的关联并调用 runtime.gfput 重新加入处理器的 Goroutine 空闲列表 gFree：
+> 经过一系列复杂的函数调用，我们最终在当前线程的 g0 的栈上调用 runtime.goexit0 函数，该函数会将 Goroutine 转换会 _Gdead 状态、清理其中的字段、移除 G 和M的关联并调用 runtime.gfput 重新加入处理器的 Goroutine 空闲列表 gFree：
 
 ```go
 func goexit0(gp *g) {
@@ -956,7 +956,7 @@ func goexit0(gp *g) {
 
 > runtime.gopark 是触发调度最常见的方法，该函数会将当前 Goroutine 暂停，被暂停的任务不会放回运行队列，我们来分析该函数的实现原理
 >
-> 比如 channel 阻塞？
+> 比如 channel 阻塞
 
 ```go
 func gopark(unlockf func(*g, unsafe.Pointer) bool, lock unsafe.Pointer, reason waitReason, traceEv byte, traceskip int) {
@@ -981,11 +981,11 @@ func park_m(gp *g) {
 }
 ```
 
-> runtime.park_m 会将当前 Goroutine 的状态从 _Grunning 切换至 _Gwaiting，调用 runtime.dropg 移除线程和 G之间的关联，在这之后就可以调用 runtime.schedule 触发新一轮的调度了。
+> runtime.park_m 会将当前 G 的状态从 _Grunning 切换至 _Gwaiting，调用 runtime.dropg 移除M和 G之间的关联，在这之后就可以调用 runtime.schedule 触发新一轮的调度了。
 >
 > 对应的 G 会被放置到某个 wait 队列(如 channel 的 waitq)
 >
-> 当 Goroutine 等待的特定条件满足后，运行时会调用 runtime.goready 将因为调用 runtime.gopark 而陷入休眠的 Goroutine 唤醒。
+> 当 G 等待的特定条件满足后，运行时会调用 runtime.goready 将因为调用 runtime.gopark 而陷入休眠的 G 唤醒。
 
 ```go
 func goready(gp *g, traceskip int) {
@@ -1005,7 +1005,7 @@ func ready(gp *g, traceskip int, next bool) {
 }
 ```
 
-> runtime.ready 会将准备就绪的 Goroutine 的状态切换至 _Grunnable 并将其加入处理器的运行队列中，等待调度器的调度。
+> runtime.ready 会将准备就绪的 G 的状态切换至 _Grunnable 并将其加入P的队列中，等待调度器的调度。
 >
 > G会加入到把它唤醒的P的队列中，比如G读写channel阻塞，P2关联的M2正在执行G2，G2读写G中阻塞的channel，那么G会尝试加入P2的runnext，local然后是global  (可以查看上面的G入队顺序逻辑）
 
